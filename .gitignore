@@ -1,6 +1,5 @@
 /dist/
 /node_modules/
-./migrate-cognito-user-pool.zip
-
+migrate-cognito-user-pool-1.zip
 package-lock.json
-migrate-cognito-user-pool.zip
+.idea

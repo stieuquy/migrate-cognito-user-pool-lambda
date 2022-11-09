@@ -1,5 +1,10 @@
-import { CognitoUserPoolTriggerEvent, Context } from 'aws-lambda';
-import { AWSError, CognitoIdentityServiceProvider, ChainableTemporaryCredentials } from 'aws-sdk';
+import {
+	Callback,
+	Context,
+	UserMigrationAuthenticationTriggerEvent,
+	UserMigrationTriggerEvent
+} from 'aws-lambda';
+import { CognitoIdentityServiceProvider, ChainableTemporaryCredentials } from 'aws-sdk';
 import { AdminInitiateAuthRequest } from 'aws-sdk/clients/cognitoidentityserviceprovider';
 
 /**
@@ -74,20 +79,20 @@ async function lookupUser(cognitoISP: CognitoIdentityServiceProvider, username: 
 	}
 }
 
-async function onUserMigrationAuthentication(cognitoISP: CognitoIdentityServiceProvider, event: CognitoUserPoolTriggerEvent) {
+async function onUserMigrationAuthentication(cognitoISP: CognitoIdentityServiceProvider, event: UserMigrationAuthenticationTriggerEvent) {
 	// authenticate the user with your existing user directory service
 	const user = await authenticateUser(cognitoISP, event.userName!, event.request.password!);
 	if (!user) {
 		throw new Error('Bad credentials');
 	}
-
 	event.response.userAttributes = {
-		// old_username: user.userName,
-		// 'custom:tenant': user.userAttributes['custom:tenant'],
+		...user.userAttributes,
 		email: user.userAttributes.email!,
-		email_verified: 'true',
 		preferred_username: user.userAttributes.preferred_username!,
+		// @ts-ignore
+		'custom:old_sub': user.userAttributes.sub,
 	};
+	delete event.response.userAttributes.sub;
 	event.response.finalUserStatus = 'CONFIRMED';
 	event.response.messageAction = 'SUPPRESS';
 
@@ -95,7 +100,7 @@ async function onUserMigrationAuthentication(cognitoISP: CognitoIdentityServiceP
 	return event;
 }
 
-async function onUserMigrationForgotPassword(cognitoISP: CognitoIdentityServiceProvider, event: CognitoUserPoolTriggerEvent) {
+async function onUserMigrationForgotPassword(cognitoISP: CognitoIdentityServiceProvider, event: UserMigrationTriggerEvent) {
 	// Lookup the user in your existing user directory service
 	const user = await lookupUser(cognitoISP, event.userName!);
 	if (!user) {
@@ -103,20 +108,21 @@ async function onUserMigrationForgotPassword(cognitoISP: CognitoIdentityServiceP
 	}
 
 	event.response.userAttributes = {
-		// old_username: user.userName,
-		// 'custom:tenant': user.userAttributes['custom:tenant'],
+		...user.userAttributes,
 		email: user.userAttributes.email!,
-		email_verified: 'true',
 		preferred_username: user.userAttributes.preferred_username!,
+		// @ts-ignore
+		'custom:old_sub': user.userAttributes.sub,
 	};
+	delete event.response.userAttributes.sub;
 	event.response.messageAction = 'SUPPRESS';
-
 	console.log(`Forgot password - response: ${JSON.stringify(event.response)}`);
 
 	return event;
 }
 
-export const handler = async (event: CognitoUserPoolTriggerEvent, context: Context): Promise<CognitoUserPoolTriggerEvent> => {
+export const handler = async (event: UserMigrationTriggerEvent, context: Context, callback: Callback) => {
+	console.log("Event: ",event)
 	const options: CognitoIdentityServiceProvider.Types.ClientConfiguration = {
 		region: OLD_USER_POOL_REGION,
 	};
@@ -133,10 +139,20 @@ export const handler = async (event: CognitoUserPoolTriggerEvent, context: Conte
 
 	switch (event.triggerSource) {
 		case 'UserMigration_Authentication':
-			return onUserMigrationAuthentication(cognitoIdentityServiceProvider, event);
+			try {
+				const data = await onUserMigrationAuthentication(cognitoIdentityServiceProvider, event);
+				callback(null, data);
+			}catch (e) {
+				callback(`Bad triggerSource ${event.triggerSource}`);
+			}
 		case 'UserMigration_ForgotPassword':
-			return onUserMigrationForgotPassword(cognitoIdentityServiceProvider, event);
+			try {
+				const data = await onUserMigrationForgotPassword(cognitoIdentityServiceProvider, event);
+				callback(null, data);
+			}catch (e) {
+				callback(`Bad triggerSource ${event.triggerSource}`);
+			}
 		default:
-			throw new Error(`Bad triggerSource ${event.triggerSource}`);
+			callback(`Bad triggerSource ${event.triggerSource}`);
 	}
 }
